@@ -1,0 +1,4 @@
+Author: HSON
+HSON menu design and Objective-C feature integration.
+Reverse-engineering references: user-supplied Video Star pseudocode, runtime class report and ARM64 disassembly.
+Runtime compatibility validation: not performed.

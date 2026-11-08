@@ -1,0 +1,9 @@
+Package: com.hson.videostartool.modernmenu
+Name: VideoStarTool HSON 3-Feature Menu
+Version: 5.0.0
+Architecture: iphoneos-arm64
+Description: Independent HSON menu with three selected Objective-C feature flows for Video Star 14.3.3.
+Maintainer: HSON
+Author: HSON
+Section: Tweaks
+Depends: mobilesubstrate

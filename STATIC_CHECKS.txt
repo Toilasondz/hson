@@ -1,0 +1,15 @@
+HSON 3-Feature Menu v5.0.0 — static checks
+
+PASS  Exactly three visible feature cards are present.
+PASS  UI card engine indexes map to 0 (Auto nhập ảnh), 2 (Auto chia beat), and 3 (Auto nhập phân cảnh).
+PASS  Runtime bundle check and Theos filter target com.frontierdesign.videostar1.
+PASS  HSON author and maintainer metadata are set in the Debian control file.
+PASS  Menu launcher is initialized by a constructor and attached through app lifecycle notifications.
+PASS  Original dylib is not linked into the independent build.
+PASS  Removed Last Code feature entrypoint and preview are absent from the compiled feature engine.
+PASS  Multi Scene includes user-selected QR image decoding and per-scene flow; native Create remains user-confirmed.
+
+NOT RUN  Theos/iOS SDK compilation (no Apple iOS SDK is installed in this environment).
+NOT RUN  Runtime tests on the target device with Video Star 14.3.3.
+
+Static checks do not prove private API ABI compatibility, successful package build, or 100% operation.
