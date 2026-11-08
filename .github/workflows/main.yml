@@ -16,21 +16,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Locate project directory
-        shell: bash
-        run: |
-          set -euo pipefail
-          PROJECT_DIR="."
-          if [ ! -f "$PROJECT_DIR/Makefile" ] && [ -f "VideoStarTool_HSON_3Features_v5/Makefile" ]; then
-            PROJECT_DIR="VideoStarTool_HSON_3Features_v5"
-          fi
-          if [ ! -f "$PROJECT_DIR/Makefile" ]; then
-            echo "ERROR: Makefile not found. Extract the ZIP contents into the repository root, or keep the project folder named VideoStarTool_HSON_3Features_v5." >&2
-            exit 1
-          fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Using project directory: $PROJECT_DIR"
-
       - name: Install build dependencies
         shell: bash
         run: |
@@ -38,59 +23,99 @@ jobs:
           brew install ldid dpkg make
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
+      - name: Locate project and verify required files
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAKEFILE_PATH="$(find "$GITHUB_WORKSPACE" -maxdepth 5 -type f -name Makefile -not -path '*/.theos/*' -print -quit)"
+          if [[ -z "$MAKEFILE_PATH" ]]; then
+            echo "ERROR: Makefile not found. Upload the project files or extract VideoStarTool_HSON_3Features_v5.zip into the repository." >&2
+            exit 1
+          fi
+
+          PROJECT_DIR="${MAKEFILE_PATH%/Makefile}"
+          for REQUIRED_FILE in control HSONModernMenu.plist Source/Tweak.m Source/Features/HSONFeatureEngine.m Source/Features/HSONFeatureEngine.h; do
+            if [[ ! -f "$PROJECT_DIR/$REQUIRED_FILE" ]]; then
+              echo "ERROR: Missing $PROJECT_DIR/$REQUIRED_FILE" >&2
+              exit 1
+            fi
+          done
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
+
       - name: Install Theos and iOS SDK
         shell: bash
         run: |
           set -euo pipefail
           THEOS="$HOME/theos"
-          if [ -d "$THEOS/.git" ]; then
-            git -C "$THEOS" submodule update --init --recursive
-          else
+
+          if [[ ! -f "$THEOS/makefiles/common.mk" ]]; then
             rm -rf "$THEOS"
             git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          else
+            git -C "$THEOS" submodule update --init --recursive
           fi
 
           SDK_DIR="$THEOS/sdks"
           mkdir -p "$SDK_DIR"
-          if ! find "$SDK_DIR" -mindepth 1 -maxdepth 1 -type d -name '*.sdk' -print -quit | grep -q .; then
-            TEMP_SDK="$RUNNER_TEMP/theos-sdks"
-            rm -rf "$TEMP_SDK"
-            git clone --depth 1 https://github.com/theos/sdks.git "$TEMP_SDK"
-            find "$TEMP_SDK" -mindepth 1 -maxdepth 1 -type d -name '*.sdk' -exec cp -R {} "$SDK_DIR"/ \;
+          SDK_FOUND="$(find "$SDK_DIR" -mindepth 1 -maxdepth 1 -type d -name '*.sdk' -print -quit)"
+
+          if [[ -z "$SDK_FOUND" ]]; then
+            SDK_REPO="$RUNNER_TEMP/theos-sdks"
+            rm -rf "$SDK_REPO"
+            git clone --depth 1 https://github.com/theos/sdks.git "$SDK_REPO"
+            find "$SDK_REPO" -mindepth 1 -maxdepth 1 -type d -name '*.sdk' -exec cp -R {} "$SDK_DIR/" \;
           fi
 
           SDK_FOUND="$(find "$SDK_DIR" -mindepth 1 -maxdepth 1 -type d -name '*.sdk' -print -quit)"
-          if [ -z "$SDK_FOUND" ]; then
+          if [[ -z "$SDK_FOUND" ]]; then
             echo "ERROR: No iOS SDK found in $SDK_DIR" >&2
             exit 1
           fi
-          echo "Using SDK: $SDK_FOUND"
-          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
 
-      - name: Verify source and three feature mappings
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+          echo "Using SDK: $SDK_FOUND"
+
+      - name: Build rootless ARM64 package
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          make --version
+          make clean
+          make package FINALPACKAGE=1
 
-          required_files=(
-            "Makefile"
-            "control"
-            "HSONModernMenu.plist"
-            "Source/Tweak.m"
-            "Source/Features/HSONFeatureEngine.m"
-            "Source/Features/HSONFeatureEngine.h"
-          )
-          for path in "${required_files[@]}"; do
-            test -f "$path" || { echo "ERROR: missing file: $path" >&2; exit 1; }
-          done
+      - name: Collect build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          RELEASE_DIR="$GITHUB_WORKSPACE/release"
+          mkdir -p "$RELEASE_DIR"
 
-          TWEAK="Source/Tweak.m"
-          ENGINE="Source/Features/HSONFeatureEngine.m"
-          HEADER="Source/Features/HSONFeatureEngine.h"
+          find .theos/obj -type f -name 'HSONModernMenu.dylib' -exec cp {} "$RELEASE_DIR/" \;
+          find packages -maxdepth 1 -type f -name '*.deb' -exec cp {} "$RELEASE_DIR/" \;
 
-          need() {
-            local file="$1"
-            local text="$2"
-            local description="$3"
-            grep -Fq -- "$text" "$file" || { echo "ERROR: $description" >&2; exit 1; }
+          DYLIB_PATH="$(find "$RELEASE_DIR" -maxdepth 1 -type f -name 'HSONModernMenu.dylib' -print -quit)"
+          DEB_PATH="$(find "$RELEASE_DIR" -maxdepth 1 -type f -name '*.deb' -print -quit)"
+
+          if [[ -z "$DYLIB_PATH" ]]; then
+            echo "ERROR: HSONModernMenu.dylib was not generated" >&2
+            exit 1
+          fi
+          if [[ -z "$DEB_PATH" ]]; then
+            echo "ERROR: Theos .deb package was not generated" >&2
+            exit 1
+          fi
+
+          file "$DYLIB_PATH"
+          lipo -info "$DYLIB_PATH"
+          ls -lh "$RELEASE_DIR"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoStarTool-HSON-3Features-v5-arm64
+          path: release/*
+          if-no-files-found: error
