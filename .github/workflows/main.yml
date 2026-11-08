@@ -16,16 +16,20 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Check project layout
+      - name: Locate project directory
         shell: bash
         run: |
           set -euo pipefail
-          for path in Makefile control HSONModernMenu.plist Source/Tweak.m Source/Features/HSONFeatureEngine.m Source/Features/HSONFeatureEngine.h; do
-            if [ ! -f "$path" ]; then
-              echo "ERROR: Missing $path. Put the contents of VideoStarTool_HSON_3Features_v5 at the repository root." >&2
-              exit 1
-            fi
-          done
+          PROJECT_DIR="."
+          if [ ! -f "$PROJECT_DIR/Makefile" ] && [ -f "VideoStarTool_HSON_3Features_v5/Makefile" ]; then
+            PROJECT_DIR="VideoStarTool_HSON_3Features_v5"
+          fi
+          if [ ! -f "$PROJECT_DIR/Makefile" ]; then
+            echo "ERROR: Makefile not found. Extract the ZIP contents into the repository root, or keep the project folder named VideoStarTool_HSON_3Features_v5." >&2
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using project directory: $PROJECT_DIR"
 
       - name: Install build dependencies
         shell: bash
@@ -39,13 +43,10 @@ jobs:
         run: |
           set -euo pipefail
           THEOS="$HOME/theos"
-
           if [ -d "$THEOS/.git" ]; then
             git -C "$THEOS" submodule update --init --recursive
           else
-            if [ -e "$THEOS" ]; then
-              rm -rf "$THEOS"
-            fi
+            rm -rf "$THEOS"
             git clone --recursive https://github.com/theos/theos.git "$THEOS"
           fi
 
@@ -55,42 +56,41 @@ jobs:
             TEMP_SDK="$RUNNER_TEMP/theos-sdks"
             rm -rf "$TEMP_SDK"
             git clone --depth 1 https://github.com/theos/sdks.git "$TEMP_SDK"
-            cp -R "$TEMP_SDK"/. "$SDK_DIR"/
+            find "$TEMP_SDK" -mindepth 1 -maxdepth 1 -type d -name '*.sdk' -exec cp -R {} "$SDK_DIR"/ \;
           fi
 
           SDK_FOUND="$(find "$SDK_DIR" -mindepth 1 -maxdepth 1 -type d -name '*.sdk' -print -quit)"
           if [ -z "$SDK_FOUND" ]; then
-            echo "ERROR: No iOS .sdk found in $SDK_DIR" >&2
+            echo "ERROR: No iOS SDK found in $SDK_DIR" >&2
             exit 1
           fi
           echo "Using SDK: $SDK_FOUND"
           echo "THEOS=$THEOS" >> "$GITHUB_ENV"
 
-      - name: Verify HSON source and three feature mappings
+      - name: Verify source and three feature mappings
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          import sys
+          cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
 
-          root = Path.cwd()
-          required = [
-              "Makefile", "control", "HSONModernMenu.plist",
-              "Source/Tweak.m", "Source/Features/HSONFeatureEngine.m",
-              "Source/Features/HSONFeatureEngine.h",
-          ]
-          missing = [p for p in required if not (root / p).is_file()]
-          if missing:
-              sys.exit("FAIL: missing project files: " + ", ".join(missing))
+          required_files=(
+            "Makefile"
+            "control"
+            "HSONModernMenu.plist"
+            "Source/Tweak.m"
+            "Source/Features/HSONFeatureEngine.m"
+            "Source/Features/HSONFeatureEngine.h"
+          )
+          for path in "${required_files[@]}"; do
+            test -f "$path" || { echo "ERROR: missing file: $path" >&2; exit 1; }
+          done
 
-          tweak = (root / "Source/Tweak.m").read_text(encoding="utf-8")
-          engine = (root / "Source/Features/HSONFeatureEngine.m").read_text(encoding="utf-8")
-          header = (root / "Source/Features/HSONFeatureEngine.h").read_text(encoding="utf-8")
-          makefile = (root / "Makefile").read_text(encoding="utf-8")
-          filter_plist = (root / "HSONModernMenu.plist").read_text(encoding="utf-8")
-          control = (root / "control").read_text(encoding="utf-8")
+          TWEAK="Source/Tweak.m"
+          ENGINE="Source/Features/HSONFeatureEngine.m"
+          HEADER="Source/Features/HSONFeatureEngine.h"
 
-          feature_checks = [
-              (0, "Auto nhập ảnh", "startFeatureReplaceMedia"),
+          need() {
+            local file="$1"
+            local text="$2"
+            local description="$3"
+            grep -Fq -- "$text" "$file" || { echo "ERROR: $description" >&2; exit 1; }
