@@ -61,7 +61,8 @@
 - (void)jumpToNextBeat;
 - (void)setSplitPoint;
 - (void)doSplit;
-- (CMTime)currentTime;
+// currentTime is invoked through a typed objc_msgSend helper below to avoid
+// selector ambiguity with AVAudioPlayer/AVAudioRecorder currentTime (NSTimeInterval).
 - (NSArray *)splitTimes;
 - (BOOL)isEnoughStorageAvailableForSplit;
 - (BOOL)sceneHasAtLeastOneClipWithSceneIndex:(NSUInteger)i;
@@ -82,6 +83,15 @@
 // ============================================================================
 static void VSAfter(int64_t ms, dispatch_block_t b) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ms * NSEC_PER_MSEC), dispatch_get_main_queue(), b);
+}
+
+// MultiSplitView exposes currentTime as CMTime in the inspected implementation.
+// Use a typed objc_msgSend because AVFoundation also declares currentTime with
+// NSTimeInterval return types on unrelated classes.
+static CMTime VSReadCurrentTime(id view) {
+    if (!view || ![view respondsToSelector:@selector(currentTime)]) return kCMTimeInvalid;
+    CMTime (*sendCurrentTime)(id, SEL) = (CMTime (*)(id, SEL))objc_msgSend;
+    return sendCurrentTime(view, @selector(currentTime));
 }
 
 // ============================================================================
@@ -652,7 +662,7 @@ static BOOL VSReplayPicked(id editor, id response) {
 - (void)beatSplitAdvanceStepWithAttempt:(NSUInteger)attempt {
     if (!_beatSplitRunning || !_beatSplitView || !_beatSplitProject) return;
     if (++_beatSplitGuard >= 4096) { [self finishBeatSplitNativeWorkflow]; return; }   // chốt chặn vòng lặp
-    CMTime t = [_beatSplitView respondsToSelector:@selector(currentTime)] ? [_beatSplitView currentTime] : kCMTimeInvalid;
+    CMTime t = VSReadCurrentTime(_beatSplitView);
     if (VSPress(_beatSplitView, "nextButton", @selector(jumpToNextBeat))) {
         [self waitForBeatAdvanceFromTime:t attempt:0];
         return;
@@ -665,7 +675,7 @@ static BOOL VSReplayPicked(id editor, id response) {
 // Chờ playhead nhảy sang beat mới (tối đa 100 lần x 12ms), rồi bấm "setSplitPoint"
 - (void)waitForBeatAdvanceFromTime:(CMTime)from attempt:(NSUInteger)attempt {
     if (!_beatSplitRunning || !_beatSplitView) return;
-    CMTime cur = [_beatSplitView respondsToSelector:@selector(currentTime)] ? [_beatSplitView currentTime] : kCMTimeInvalid;
+    CMTime cur = VSReadCurrentTime(_beatSplitView);
     BOOL valid = CMTIME_IS_VALID(cur);
     __weak typeof(self) ws = self;
     if (!valid || (CMTIME_IS_VALID(from) && CMTimeCompare(cur, from) <= 0)) {          // chưa nhảy
@@ -1019,12 +1029,15 @@ static BOOL VSReplayPicked(id editor, id response) {
     _mediaApplyResponse = _mediaPickerResponse;
     __weak typeof(self) ws = self;
     void (^afterApply)(NSUInteger) = ^(NSUInteger changed) {
-        NSLog(@"[HSONFeature] scene %lu media layers changed=%lu; waiting for native Create", (unsigned long)(ws->_mergeStartScene + offset + 1), (unsigned long)changed);
-        [ws showFlowBannerTitle:@"Lưu phân cảnh"
-                        message:@"Kiểm tra layer trong Video Star, sau đó nhấn Create của ứng dụng. HSON sẽ tiếp tục khi editor đóng."
-                         primary:@"Đã hiểu" secondary:@"Dừng"
-                 primaryHandler:nil secondaryHandler:^{ [ws cancelMultiSceneWorkflow]; }];
-        [ws waitForMergeCreateCompletionAtOffset:offset project:ws->_mergeProject editor:editor attempt:0];
+        // Promote weak self exactly once before accessing ivars inside the block.
+        typeof(self) strongSelf = ws;
+        if (!strongSelf) return;
+        NSLog(@"[HSONFeature] scene %lu media layers changed=%lu; waiting for native Create", (unsigned long)(strongSelf->_mergeStartScene + offset + 1), (unsigned long)changed);
+        [strongSelf showFlowBannerTitle:@"Lưu phân cảnh"
+                               message:@"Kiểm tra layer trong Video Star, sau đó nhấn Create của ứng dụng. HSON sẽ tiếp tục khi editor đóng."
+                                primary:@"Đã hiểu" secondary:@"Dừng"
+                        primaryHandler:nil secondaryHandler:^{ [ws cancelMultiSceneWorkflow]; }];
+        [strongSelf waitForMergeCreateCompletionAtOffset:offset project:strongSelf->_mergeProject editor:editor attempt:0];
     };
     NSArray *sceneLayers = VSCollectMediaLayers(editor);
     if (sceneLayers.count == 0) {
@@ -1060,7 +1073,11 @@ static BOOL VSReplayPicked(id editor, id response) {
     [self removeFlowBanner];
     (void)project;
     __weak typeof(self) ws = self;
-    VSAfter(100, ^{ [ws applyMergeSceneOffset:offset + 1 project:ws->_mergeProject]; });
+    VSAfter(100, ^{
+        typeof(self) strongSelf = ws;
+        if (!strongSelf) return;
+        [strongSelf applyMergeSceneOffset:offset + 1 project:project];
+    });
 }
 
 
